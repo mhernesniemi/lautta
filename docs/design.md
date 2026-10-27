@@ -49,7 +49,7 @@ It's a good foundation. These parts carry over almost as they are:
 
 | Today                                                                   | Problem at scale                                                          | Change                                                                                                      |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| ~600 lines of workflows + ops scripts live in the project               | 20 copies drift; every fix is 20 PRs                                      | Reusable workflows + composite actions in a central repo, referenced by tag (`@v1`). Project keeps ~30 lines |
+| ~600 lines of workflows + ops scripts live in the project               | 20 copies drift; every fix is 20 PRs                                      | One reusable workflow in a central repo, referenced by tag (`@v1`). Project keeps ~30 lines                |
 | Ops scripts hardcode `colleague_feedback_data`, container names         | Not reusable                                                              | Parametrize by service name; derive volume/container names                                                  |
 | Server created by hand, then `kamal setup`                              | Unrepeatable, no hardening, nobody knows what's running where             | OpenTofu (UpCloud provider) + cloud-init; a fleet registry lists every project                              |
 | `ssh: root`, `ssh-keyscan` fallback                                     | Root SSH everywhere; trust-on-first-use host keys                         | `deploy` user, root login off, firewall; provisioning outputs known_hosts                                   |
@@ -175,39 +175,40 @@ Around it:
 
 ### Projects with Kide CMS
 
-Kide is the CMS for client projects that need one. It's an Astro app on SQLite + Drizzle, so it
-fits the default stack; these are the places where it needs platform support or Kide changes.
-Projects start from `create-kide-app` (Node target), and `lautta init` adds the platform files on
-top, rather than a separate template duplicating Kide's.
+Kide is the CMS for client projects that need one: an Astro app on SQLite + Drizzle. Projects
+start from `create-kide-app` (Node target), and `lautta init --stack kide` adds the platform
+files on top. Kide v0.35+ has everything the platform needs, so the stack is settings only:
 
-| Kide on Node today                                                    | Platform answer                                                                                      | Kide change worth making                                                        |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| DB at `CMS_DATABASE_URL` (default `./data/cms.db`)                    | `CMS_DATABASE_URL=/data/cms.db` on the volume; Litestream as for any app. Always SQLite, never Postgres | —                                                                               |
-| Uploads in `CMS_UPLOADS_DIR` (default `public/uploads/`)              | `/data/uploads` on the volume, backed up by a restic/rclone accessory to Object Storage (Litestream covers only the DB) | S3-compatible storage adapter (UpCloud Object Storage), so uploads leave the server |
-| Schema via `pnpm cms:push` before start; no schema work at boot       | Container start runs the schema sync, then the server; a failed sync fails `/up`, so the old version keeps serving | Committed Drizzle migrations applied at boot (as the D1 target already does), in line with the rule above |
-| Scheduled publishing and tasks need `/api/cms/cron/*` polled each minute | Small per-app cron accessory calling both endpoints over the internal Docker network with `CRON_SECRET` | Opt-in in-process scheduler for Node, removing the accessory                   |
-| Standalone Node adapter doesn't compress                              | Verify what kamal-proxy does; otherwise middleware mode + compression in the template                | Compression built in for the Node target                                        |
-| No health endpoint documented                                         | Template adds `/up` (DB reachable)                                                                   | Ship `/up` in Kide                                                              |
-| Secrets: `KIDE_AUTH_SECRET`, `CRON_SECRET`, `RESEND_API_KEY`, SSO     | Standard secrets in the client's 1Password vault; `CMS_TRUSTED_ORIGIN` from `fleet.yml`     | —                                                                               |
+| Need                    | Kide setting (set by the template)                                   |
+| ----------------------- | -------------------------------------------------------------------- |
+| Database on the volume  | `CMS_DATABASE_URL=/data/cms.db`, backed up by Litestream            |
+| Migrations at boot      | `CMS_MIGRATE_ON_BOOT=1`; `src/cms/migrations` ships in the image     |
+| Scheduled publishing    | `CMS_SCHEDULER=1` (in-process; overlapping deploys publish once)     |
+| Health check            | `/api/cms/health`                                                    |
+| Uploads                 | S3 storage profile → UpCloud Object Storage (`S3_*` from the infra item) |
+| Image cache             | `CMS_CACHE_DIR=/data/cache`                                          |
+| CI                      | `db:check` → `kide migrate --check`                                  |
 
-Sharp's image cache should live on the volume too, so renditions survive deploys. Content
-editors work on production; staging gets a copy of production's DB and uploads on demand
-(`ops: copy-content-to-staging`), never the other way round.
+Content editors work on production; a later `copy-content-to-staging` ops command can copy
+production's database to staging, never the other way round.
 
 ### Projects with Hoikka
 
 Hoikka is the e-commerce platform: a SvelteKit app (storefront + admin) on SQLite + Drizzle.
-Projects start from `create-hoikka-app` (Node target), and `lautta init` adds the platform files.
-It already fits the platform better than Kide does:
+Projects start from `create-hoikka-app` (Node target), and `lautta init --stack hoikka` adds the
+platform files. Like Kide, it's settings only:
 
-| Hoikka on Node today                                                       | Platform answer                                                                                     |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| SQLite at `./data/hoikka.db`, Drizzle migrations at boot                   | Fits the contract as is; Litestream as for any app. Always SQLite, never Postgres                   |
-| Uploads and image cache under `./data/uploads/` (paths relative to the app) | Mount the volume at `/app/data`; uploads backed up by the same accessory as Kide, skipping `.cache` |
-| In-process scheduler (outbox + tasks every minute), started on first request | No cron accessory needed; the `/up` health check starts it. Outbox claims rows, so the brief overlap of old and new containers during a deploy is safe |
-| `BODY_SIZE_LIMIT` up to 200 MB for digital-product uploads                 | Raise kamal-proxy's request size limit to match for Hoikka apps                                     |
-| No health endpoint                                                         | Template adds `/up` (DB reachable); worth shipping in Hoikka itself                                 |
-| Storage adapters `fs` and `r2`                                              | An S3-compatible adapter (UpCloud Object Storage) would move uploads off the server, as for Kide   |
+| Need                   | Hoikka setting (set by the template)                                       |
+| ---------------------- | -------------------------------------------------------------------------- |
+| Database on the volume | `DATABASE_URL=/data/hoikka.db`, backed up by Litestream                   |
+| Migrations at boot     | Built in; `drizzle/` ships in the image; foreign keys off while migrating |
+| Scheduler              | Built in, safe with overlapping containers                                 |
+| Health check           | `/api/health`                                                              |
+| Uploads                | S3 backend → UpCloud Object Storage (`S3_*` from the infra item)          |
+| Image cache            | `CACHE_DIR=/data/cache`                                                    |
+| Large downloads        | `BODY_SIZE_LIMIT=209715200`; check kamal-proxy's request size limit       |
+| Behind kamal-proxy     | `ORIGIN` and `PUBLIC_STORE_URL` per environment                            |
+| CI                     | `db:check`                                                                 |
 
 Secrets: `BETTER_AUTH_SECRET`, `ADMIN_SETUP_SECRET` (removed after first setup), `TASKS_SECRET`,
 `RESEND_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, SSO pairs. `PUBLIC_STORE_URL` comes
@@ -230,57 +231,33 @@ Shops handle money, so they get more than the baseline:
 - **Local**: `pnpm dev`, seeded data, no external services required (mock adapters as in the
   feedback tool's HiBob/email outbox — a good pattern to keep).
 - **Staging**: deployed automatically on every push to `main` that passes CI.
-  `<project>.staging.<agency-domain>`, behind a shared password or IP allow list, `noindex`.
+  `<project>.staging.<agency-domain>`. Apps get `LAUTTA_ENV=staging` and must send `noindex`
+  (and add a password if the client needs one).
 - **Production**: deployed by `pnpm release` (date tag), promoting the image staging already ran.
 - **PR previews**: skip for now. Revisit once the rest is stable; they're the most work per value.
 
 ## Pipeline
 
-One reusable workflow per stage, all in this repo. A project's whole workflow:
+One reusable workflow, [`app.yml`](../.github/workflows/app.yml). A project's two workflow files
+just call it: `pipeline.yml` (push, pull request, release tag) and `ops.yml` (the Run workflow
+buttons, which pass a `command`).
 
-```yaml
-# .github/workflows/pipeline.yml in a client project
-name: Pipeline
-on:
-  push: { branches: [main], tags: ['v*'] }
-  pull_request:
-jobs:
-  pipeline:
-    uses: mhernesniemi/lautta/.github/workflows/node-app.yml@v1
-    with:
-      service: client-x-site
-    secrets: inherit
-```
+1. **quality**: `lint`, `check` and `db:check` scripts when present; Kamal config parses.
+2. **test**: `test`, then `test:e2e` (Playwright) when present.
+3. **image** (needs 1–2): build, smoke test the health check and `smoke-paths`; on main, push
+   `<image>:<commit>`. Only tested commits reach the registry, so an image there means the commit
+   passed.
+4. **deploy**: main → staging. A release tag waits for main's image of that commit (or fails if
+   main's pipeline failed), tags it with the release name and deploys it to production, then
+   writes the GitHub Release notes.
+5. **Ops commands** (`command` set): rollback, restore-database, redeploy, setup, backups, logs.
 
-```yaml
-# .github/workflows/ops.yml — the "Run workflow" buttons
-name: Ops
-on:
-  workflow_dispatch:
-    inputs:
-      command: { type: choice, options: [rollback, restore-database, setup, backups, logs] }
-      environment: { type: choice, options: [staging, production] }
-      # …
-jobs:
-  ops:
-    uses: mhernesniemi/lautta/.github/workflows/ops.yml@v1
-    with: { command: '${{ inputs.command }}', environment: '${{ inputs.environment }}' }
-    secrets: inherit
-```
+Secrets come from 1Password: `.lautta/secrets.<environment>` lists `op://` references, loaded by
+1Password's GitHub action with the repo's only secret, `OP_SERVICE_ACCOUNT_TOKEN`. The deploy SSH
+key and the servers' known_hosts come from the shared ops vault.
 
-`node-app.yml` runs:
-
-1. **quality**: `pnpm lint`, `pnpm check` (svelte-check / astro check), Kamal config parse.
-2. **test**: `pnpm test:unit --run`, Playwright e2e (browsers cached).
-3. **image** (needs 1–2): build, smoke test `/up` + project-defined URLs, push `:<sha>` to GHCR,
-   upload source maps. Trivy scan for critical CVEs (warn first, fail later).
-4. **staging** (main only, needs 3): `kamal deploy -d staging --skip-push --version <sha>`.
-5. **production** (tag only): verify `:<sha>` exists (= passed), retag as the release, deploy,
-   write release notes, mark the Sentry release deployed.
-
-The project can override steps via inputs (e.g. `e2e: false`, `smoke-paths: '/ /login'`) but not
-fork the pipeline. Workflow versioning: `@v1` moves for fixes; breaking changes go to `@v2` and
-projects upgrade through Renovate.
+Projects can tune the pipeline with inputs (`e2e`, `smoke-paths`, `smoke-env`) but not fork it.
+`@v1` moves for fixes; breaking changes go to `@v2`, and Renovate brings projects along.
 
 ## Infrastructure as code
 
@@ -391,57 +368,47 @@ Grafana + Loki, ELK.
 | Load testing               | k6 script template (the feedback tool has a `load-test.js` start) |
 | Claude Code                | A skill that drives the CLI (`new project`, `provision`, `go live`) — the postponed `upcloud-kamal-deploy` idea fits here |
 
-## This repo's layout (target)
+## This repo's layout
 
 ```
 lautta/
-  SETUP.md                     this document
-  README.md                    how to use it, day to day
-  .github/workflows/           reusable: node-app.yml, ops.yml, restore-test.yml, maintenance.yml
-  actions/                     composite actions: setup-node-pnpm, kamal, smoke-test, slack-notify
-  templates/
-    shared/                    .kamal/secrets, config/deploy.yml, .dockerignore, renovate.json, pipeline.yml, ops.yml
-    sveltekit/                 Dockerfile, /up route, hooks with Sentry
-    astro-kide/                additions on top of create-kide-app: Dockerfile, /up, cron + uploads backup accessories
-    hoikka/                    additions on top of create-hoikka-app: Dockerfile, /up, uploads backup, proxy body limit
-    astro-static/              Dockerfile (static server), healthcheck
-  cli/                         `lautta` CLI (Node): init, provision, secrets, doctor, vendor
-  infra/tofu/                  modules/host, modules/project, fleet/ (reads fleet.yml)
-  infra/cloud-init/            host.yaml
-  fleet.yml                    every host and project
+  README.md                    day-to-day use
+  docs/design.md, runbook.md   this document; what to do when things go wrong
+  .github/workflows/app.yml    the reusable pipeline and ops commands
+  cli/                         `lautta` CLI: init, doctor, update, release
+  templates/                   common/ (Kamal, Litestream, secrets, workflows), node/ and static/
+                               Dockerfiles, and a stack.json per stack
+  infra/modules/host           server + cloud-init (deploy user, firewall, updates, host-check)
+  infra/modules/project        buckets, scoped keys → 1Password, DNS, uptime monitors
+  examples/fleet               the private fleet repo: fleet.yml + main.tf
   renovate/default.json        shared preset
-  runbooks/                    rollback, restore, server lost, new client, go-live checklist
-  skill/                       Claude Code skill wrapping the CLI
 ```
 
-`lautta doctor` in a project compares its files to the template version it was generated from and
-lists drift — the cheap alternative to keeping templates and projects in sync by hand.
+`fleet.yml` lists real clients and servers, so it lives in a private repo, not here.
+`lautta doctor` compares a project's files to the templates it was made from and lists drift;
+`lautta update` takes template changes for files the project hasn't edited.
 
 ## Roadmap
 
-**Phase 1 — extract (1–2 weeks)**
+**Done**
 
-1. Move feedback tool's workflows into reusable `node-app.yml` + `ops.yml`, parametrized.
-2. Fix the gaps found above (image gated on tests, non-root deploy user, known_hosts).
-3. Templates for SvelteKit, static Astro, Astro + Kide and Hoikka, with the app contract.
-   Deploy one Kide and one Hoikka project end to end to settle schema sync, cron and uploads backup.
-4. Switch the feedback tool to the reusable workflows as the first consumer.
+- Reusable pipeline with gated images, staging on main, releases and ops commands
+- Templates for SvelteKit, Hoikka, Kide and static Astro; images built and run locally for
+  Hoikka, Kide and static Astro
+- `lautta` CLI: init, doctor, update, release
+- OpenTofu modules for hosts and projects, example fleet with encrypted state
+- Server hardening, host-check heartbeats, Renovate preset, runbook
 
-**Phase 2 — fleet (2–3 weeks)**
+**Next**
 
-5. OpenTofu + cloud-init for hosts (check first that the UpCloud and Better Stack providers
-   resolve in the OpenTofu registry); `fleet.yml`; first shared prod and staging hosts.
-6. Staging environment via Kamal destinations; main → staging automatically.
-7. Monitoring: Sentry alert rules; Better Stack monitors, heartbeats and collector from `fleet.yml`; Slack alerts.
-8. Renovate preset, restore-test workflow, GHCR retention.
-
-**Phase 3 — speed (ongoing)**
-
-9. `lautta` CLI: `init`, `provision`, `doctor`, `vendor`.
-10. Claude Code skill on top of the CLI.
-11. Runbooks; go-live checklist (DNS, TLS, backups verified, monitors on, Sentry alerts, robots).
-12. Later, if wanted: PR previews, Tailscale-only SSH with the Tailscale GitHub Action, a
-    self-hosted runner on UpCloud if Actions minutes become a cost.
+1. First real deploy: one shared prod and one staging server, one Hoikka and one Kide project.
+   Settle what only a live run shows (Kamal's first `setup`, restore, the 1Password load).
+2. Tag `v1` once that works; projects pin `@v1`.
+3. Move the feedback tool onto lautta.
+4. Weekly restore-test workflow, GHCR retention, Slack deploy notifications, Sentry in the
+   Kide and Hoikka templates.
+5. Claude Code skill on top of the CLI.
+6. Later, if wanted: PR previews, Tailscale-only SSH, a self-hosted runner.
 
 ## Open questions
 
