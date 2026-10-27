@@ -7,22 +7,22 @@ FROM node:${NODE_VERSION}-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     CI=true
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null \
+# Build tools for native modules without a prebuilt binary (e.g. better-sqlite3); they stay in
+# the build stages, not in the runtime image.
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends ca-certificates python3 make g++ >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 WORKDIR /app
+# Download every package once, from the lockfile alone, so this layer is reused until the
+# dependencies change. The installs below then run offline. (Works with pnpm workspaces.)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yam[l] .npmr[c] ./
-
-# Runtime dependencies only. Root lifecycle scripts are skipped (they need dev tools);
-# `pnpm rebuild` still runs the dependencies' own install scripts, e.g. native binaries.
-FROM base AS prod-deps
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --ignore-scripts && pnpm rebuild
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm fetch --ignore-scripts
 
 FROM base AS build
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile
 COPY . .
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --offline --frozen-lockfile
 # With SENTRY_ORG, SENTRY_PROJECT and the token (a build secret, never stored in the image),
 # a Sentry Vite plugin can upload source maps during the build.
 ARG SENTRY_ORG= SENTRY_PROJECT=
@@ -30,6 +30,13 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
     export SENTRY_AUTH_TOKEN="$(cat /run/secrets/SENTRY_AUTH_TOKEN 2>/dev/null)" \
  && pnpm build
 RUN find {{build_output}} -name '*.map' -delete
+
+# Runtime dependencies only. Root lifecycle scripts are skipped (they need dev tools);
+# `pnpm rebuild` still runs the dependencies' own install scripts, e.g. native binaries.
+FROM base AS prod-deps
+COPY . .
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --offline --frozen-lockfile --prod --ignore-scripts && pnpm rebuild
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 ENV NODE_ENV=production \

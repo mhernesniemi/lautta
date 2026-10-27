@@ -10,10 +10,10 @@ ENV PNPM_HOME=/pnpm \
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yam[l] .npmr[c] ./
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm fetch --ignore-scripts
 COPY . .
-RUN pnpm build
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --offline --frozen-lockfile && pnpm build
 
 FROM caddy:2.10-alpine
 COPY config/Caddyfile /etc/caddy/Caddyfile
