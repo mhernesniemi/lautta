@@ -1,0 +1,93 @@
+#cloud-config
+# Rendered by the host module. A Docker host for Kamal: deploy user only, no root or password
+# logins, a firewall open to SSH and web, automatic security updates, and host-check.
+hostname: ${hostname}
+timezone: UTC
+
+# The SSH host key comes from OpenTofu, so the servers' known_hosts is known in advance.
+ssh_deletekeys: true
+ssh_genkeytypes: []
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, host_key_private)}
+  ed25519_public: ${host_key_public}
+
+disable_root: true
+ssh_pwauth: false
+users:
+  - name: deploy
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys: ${jsonencode(ssh_keys)}
+
+swap:
+  filename: /swapfile
+  size: 2G
+
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - ufw
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/50-lautta.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+  - path: /etc/apt/apt.conf.d/52lautta-upgrades
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+  - path: /etc/docker/daemon.json
+    content: |
+      {"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "3"}}
+  - path: /usr/local/bin/lautta-host-check
+    permissions: '0755'
+    encoding: b64
+    content: ${host_check}
+  - path: /etc/lautta/host-check.env
+    permissions: '0600'
+    content: |
+      HEARTBEAT_URL=${heartbeat_url}
+  - path: /etc/systemd/system/lautta-host-check.service
+    content: |
+      [Unit]
+      Description=Report this server's health to its Better Stack heartbeat
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/lautta-host-check
+  - path: /etc/systemd/system/lautta-host-check.timer
+    content: |
+      [Unit]
+      Description=Run lautta-host-check every 5 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker deploy
+  - systemctl restart ssh
+%{ if heartbeat_url != "" ~}
+  - systemctl daemon-reload
+  - systemctl enable --now lautta-host-check.timer
+%{ endif ~}
+%{ if collector_command != "" ~}
+  - ${jsonencode(collector_command)}
+%{ endif ~}
