@@ -94,8 +94,9 @@ export function init(dir, options) {
 
 	console.log(`
 ✓ ${service} is set up for the ${options.stack} stack. Next:
-  1. In 1Password, create the items ${service}-production and ${service}-staging in the
-     "${values.vault}" vault, with a field for each name in .lautta/secrets.production.
+  1. In 1Password's "${values.vault}" vault, create the items ${service}-production and
+     ${service}-staging with a field for each name in .lautta/secrets.<environment> that points
+     to them. The *-infra items come from OpenTofu (the project module).
   2. Give the repository the secret OP_SERVICE_ACCOUNT_TOKEN (a service account that can read
      that vault and the shared "lautta" vault).
   3. Run pnpm install, commit, and push to main: the pipeline deploys staging.`);

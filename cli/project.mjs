@@ -47,11 +47,23 @@ const LITESTREAM_SECRETS = [
 
 const secretNames = (stack) => [...stack.secrets, ...(stack.database ? LITESTREAM_SECRETS : [])];
 
+// Storage keys are created by OpenTofu (infra/modules/project) into their own 1Password item,
+// <service>-<environment>-infra, so applying never touches the secrets people typed in.
+const INFRA_SECRETS = new Set([
+	...LITESTREAM_SECRETS,
+	'S3_BUCKET',
+	'S3_ENDPOINT',
+	'S3_REGION',
+	'S3_ACCESS_KEY_ID',
+	'S3_SECRET_ACCESS_KEY'
+]);
+
 const secretRefs = (stack, values, environment) =>
 	lines(
-		secretNames(stack).map(
-			(name) => `${name}=op://${values.vault}/${values.service}-${environment}/${name}`
-		)
+		secretNames(stack).map((name) => {
+			const item = `${values.service}-${environment}${INFRA_SECRETS.has(name) ? '-infra' : ''}`;
+			return `${name}=op://${values.vault}/${item}/${name}`;
+		})
 	);
 
 /** Everything a template can refer to, from the stack definition and the project's values. */

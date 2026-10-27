@@ -72,7 +72,8 @@ test('stacks without a database get no backups', () => {
 test('stacks with a database stream it to Object Storage', () => {
 	const files = renderProject('kide', values);
 	assert.match(files['config/deploy.yml'], /DATABASE_FILE: cms\.db/);
-	assert.match(files['.lautta/secrets.production'], /LITESTREAM_BUCKET=op:\/\/client\/client-site-production\//);
+	assert.match(files['.lautta/secrets.production'], /LITESTREAM_BUCKET=op:\/\/client\/client-site-production-infra\//);
+	assert.match(files['.lautta/secrets.production'], /KIDE_AUTH_SECRET=op:\/\/client\/client-site-production\//);
 	assert.match(files['config/deploy.production.yml'], /CMS_TRUSTED_ORIGIN: "https:\/\/www\.client\.fi"/);
 });
 
