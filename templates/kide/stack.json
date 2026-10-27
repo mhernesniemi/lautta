@@ -1,0 +1,27 @@
+{
+  "description": "Kide CMS (Astro, Node target)",
+  "dockerfile": "node",
+  "buildOutput": "dist",
+  "start": ["node", "dist/server/entry.mjs"],
+  "copy": ["src/cms/migrations"],
+  "healthPath": "/api/cms/health",
+  "database": "cms.db",
+  "env": {
+    "CMS_DATABASE_URL": "/data/cms.db",
+    "CMS_MIGRATE_ON_BOOT": "1",
+    "CMS_SCHEDULER": "1",
+    "CMS_CACHE_DIR": "/data/cache"
+  },
+  "originEnv": ["CMS_TRUSTED_ORIGIN"],
+  "secrets": [
+    "KIDE_AUTH_SECRET",
+    "CRON_SECRET",
+    "RESEND_API_KEY",
+    "S3_BUCKET",
+    "S3_ENDPOINT",
+    "S3_REGION",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY"
+  ],
+  "memory": "768m"
+}

@@ -1,0 +1,18 @@
+{{#database}}
+# Litestream streams each database change to Object Storage within about a second. A daily
+# snapshot, kept with all changes for 14 days: any point in the last two weeks can be restored.
+# Values in ${...} come from the litestream accessory's env (config/deploy.yml).
+snapshot:
+  interval: 24h
+  retention: 336h
+
+dbs:
+  - path: /data/${DATABASE_FILE}
+    replica:
+      type: s3
+      bucket: ${LITESTREAM_BUCKET}
+      path: ${LITESTREAM_PATH}
+      endpoint: ${LITESTREAM_ENDPOINT}
+      region: europe-1
+      force-path-style: true
+{{/database}}

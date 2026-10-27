@@ -1,0 +1,12 @@
+servers:
+  web:
+    hosts:
+      - {{production_host}}
+
+proxy:
+  host: {{production_domain}}
+
+env:
+  clear:
+    LAUTTA_ENV: production
+{{production_origin_env}}

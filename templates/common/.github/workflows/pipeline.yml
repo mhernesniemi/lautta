@@ -1,0 +1,22 @@
+name: Pipeline
+
+# Pull requests run checks and tests. Main deploys to staging; a release tag (`pnpm release`)
+# promotes the image staging runs to production.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pipeline:
+    uses: mhernesniemi/lautta/.github/workflows/app.yml@{{lautta_ref}}
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    secrets: inherit

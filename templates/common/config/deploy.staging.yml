@@ -1,0 +1,12 @@
+servers:
+  web:
+    hosts:
+      - {{staging_host}}
+
+proxy:
+  host: {{staging_domain}}
+
+env:
+  clear:
+    LAUTTA_ENV: staging
+{{staging_origin_env}}

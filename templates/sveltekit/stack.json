@@ -1,0 +1,17 @@
+{
+  "description": "SvelteKit with adapter-node, SQLite and Drizzle",
+  "dockerfile": "node",
+  "buildOutput": "build",
+  "start": ["node", "build"],
+  "copy": ["drizzle"],
+  "healthPath": "/up",
+  "database": "app.db",
+  "env": {
+    "DATABASE_URL": "/data/app.db",
+    "ADDRESS_HEADER": "x-forwarded-for",
+    "XFF_DEPTH": "1"
+  },
+  "originEnv": ["ORIGIN"],
+  "secrets": ["SENTRY_DSN"],
+  "appFiles": { "src/routes/up/+server.ts": "app/src/routes/up/+server.ts" }
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Static Astro site served by Caddy",
+  "dockerfile": "static",
+  "healthPath": "/up",
+  "database": null,
+  "env": {},
+  "originEnv": [],
+  "secrets": [],
+  "memory": "128m"
+}

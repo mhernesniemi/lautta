@@ -1,0 +1,41 @@
+name: Ops
+
+# GitHub → Actions → Ops → Run workflow. See the runbook in the lautta repo.
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: What to do
+        type: choice
+        options:
+          - rollback # Switch back to the previous version; data stays as it is
+          - restore-database # Replace the database with the latest backup (or the time below)
+          - redeploy # Deploy the image of the selected branch's latest commit again
+          - backups # Start or restart the Litestream backup container
+          - logs # Print the app's latest logs
+          - setup # First deploy to a new server
+      environment:
+        description: Where
+        type: choice
+        options: [production, staging]
+      restore_to:
+        description: 'restore-database only, optional: UTC time, e.g. 2026-10-07T12:00:00Z (empty = latest)'
+        type: string
+        required: false
+      version:
+        description: 'rollback only, optional: version to roll back to (empty = the previous one)'
+        type: string
+        required: false
+
+jobs:
+  ops:
+    uses: mhernesniemi/lautta/.github/workflows/ops.yml@{{lautta_ref}}
+    with:
+      command: ${{ inputs.command }}
+      environment: ${{ inputs.environment }}
+      restore_to: ${{ inputs.restore_to }}
+      version: ${{ inputs.version }}
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit

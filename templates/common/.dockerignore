@@ -1,0 +1,23 @@
+# Keep the build context small and never bake secrets or local data into the image.
+.git
+.github
+.kamal
+.lautta
+.vscode
+.svelte-kit
+.astro
+node_modules
+build
+dist
+data
+e2e
+test-results
+playwright-report
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore
