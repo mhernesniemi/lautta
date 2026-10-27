@@ -1,0 +1,20 @@
+{
+	"name": "lautta",
+	"version": "0.1.0",
+	"description": "Build, ship and run client web apps on UpCloud with Kamal",
+	"license": "MIT",
+	"type": "module",
+	"bin": {
+		"lautta": "cli/lautta.mjs"
+	},
+	"files": [
+		"cli",
+		"templates"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"test": "node --test"
+	}
+}
