@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { appFiles, renderProject, ROOT, sha } from './project.mjs';
+import { appFiles, loadStack, renderProject, ROOT, sha } from './project.mjs';
 
 export const STATE_FILE = '.lautta/project.json';
 
@@ -22,15 +22,20 @@ export function lauttaVersion() {
 	return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 }
 
-/** Adds `pnpm release` and the lautta dev dependency, keeping the file's indentation. */
-function updatePackageJson(dir, ref) {
+/**
+ * Adds `pnpm release`, the stack's scripts and the lautta dev dependency, keeping the file's
+ * indentation. Existing scripts win.
+ */
+function updatePackageJson(dir, ref, scripts) {
 	const path = join(dir, 'package.json');
 	if (!existsSync(path)) return;
 	const text = readFileSync(path, 'utf8');
 	const indent = /^(\s+)"/m.exec(text)?.[1] ?? '\t';
 	const pkg = JSON.parse(text);
 	pkg.scripts ??= {};
-	pkg.scripts.release ??= 'lautta release';
+	for (const [name, command] of Object.entries({ release: 'lautta release', ...scripts })) {
+		pkg.scripts[name] ??= command;
+	}
 	pkg.devDependencies ??= {};
 	pkg.devDependencies.lautta ??= `github:mhernesniemi/lautta#${ref}`;
 	writeFileSync(path, JSON.stringify(pkg, null, indent) + '\n');
@@ -76,7 +81,7 @@ export function init(dir, options) {
 		writeFileSync(join(dir, path), content);
 		console.log(`  wrote ${path}`);
 	}
-	updatePackageJson(dir, ref);
+	updatePackageJson(dir, ref, loadStack(options.stack).scripts);
 
 	const state = {
 		lautta: lauttaVersion(),

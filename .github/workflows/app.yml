@@ -1,0 +1,380 @@
+name: Lautta app
+
+# The whole pipeline of a lautta project, called from its .github/workflows/pipeline.yml and
+# ops.yml. Pull requests: checks and tests. Main: checks, tests, image, deploy to staging.
+# A release tag: deploy the image main built for that commit to production. With `command`
+# set, it runs one ops command instead (rollback, restore-database, …).
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Ops command to run instead of the pipeline
+        type: string
+        default: ''
+      environment:
+        description: Environment for an ops command
+        type: string
+        default: staging
+      restore_to:
+        type: string
+        default: ''
+      version:
+        type: string
+        default: ''
+      e2e:
+        description: Run `pnpm test:e2e` when the project has it
+        type: boolean
+        default: true
+      smoke-paths:
+        description: Space-separated paths the built container must answer (2xx or 3xx), besides the health check
+        type: string
+        default: ''
+      smoke-env:
+        description: KEY=value lines the container needs to start in the smoke test (no real secrets)
+        type: string
+        default: ''
+      ops-vault:
+        description: 1Password vault holding the deploy SSH key and the servers' known_hosts
+        type: string
+        default: lautta
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN:
+        required: false
+      SENTRY_AUTH_TOKEN:
+        required: false
+
+env:
+  KAMAL_VERSION: 2.12.0
+
+jobs:
+  quality:
+    name: Lint and type-check
+    if: inputs.command == '' && github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run --if-present lint
+      - run: pnpm run --if-present check
+      - name: Migrations match the schema
+        run: pnpm run --if-present db:check
+      # Kamal reads these only at deploy time; catch mistakes here instead.
+      - name: Kamal config parses
+        run: |
+          for file in config/deploy*.yml; do
+            ruby -ryaml -rerb -e 'YAML.load(ERB.new(File.read(ARGV[0])).result)' "$file"
+          done
+
+  test:
+    name: Tests
+    if: inputs.command == '' && github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Does the project have end-to-end tests?
+        id: e2e
+        run: |
+          if [ "${{ inputs.e2e }}" = true ] && node -e "process.exit(require('./package.json').scripts?.['test:e2e'] ? 0 : 1)"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Cache Playwright browsers
+        if: steps.e2e.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - if: steps.e2e.outputs.run == 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Unit tests
+        run: pnpm run --if-present test
+      - name: End-to-end tests
+        if: steps.e2e.outputs.run == 'true'
+        run: pnpm test:e2e
+      - name: Keep the Playwright report when something fails
+        if: failure() && steps.e2e.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+  # Builds and smoke-tests the production image. On main it's pushed as <image>:<commit> only
+  # after every check passed, so an image in the registry means that commit passed.
+  image:
+    name: Image
+    needs: [quality, test]
+    if: inputs.command == '' && github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Names
+        run: |
+          {
+            echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "SERVICE=$(sed -n 's/^service: *//p' config/deploy.yml)"
+            echo "HEALTH_PATH=$(sed -n 's/^ *path: *//p' config/deploy.yml | head -1)"
+          } >> "$GITHUB_ENV"
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          # Kamal refuses to run an image without its service label.
+          labels: service=${{ env.SERVICE }}
+          build-args: |
+            SENTRY_ORG=${{ env.PUBLISH == 'true' && vars.SENTRY_ORG || '' }}
+            SENTRY_PROJECT=${{ env.PUBLISH == 'true' && vars.SENTRY_PROJECT || '' }}
+          secrets: |
+            SENTRY_AUTH_TOKEN=${{ env.PUBLISH == 'true' && secrets.SENTRY_AUTH_TOKEN || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the container
+        env:
+          SMOKE_ENV: ${{ inputs.smoke-env }}
+          SMOKE_PATHS: ${{ inputs.smoke-paths }}
+        run: |
+          printf '%s\n' "$SMOKE_ENV" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > smoke.env || true
+          docker run -d --name app -p 3000:3000 --env-file smoke.env -e LAUTTA_ENV=ci "$IMAGE:$GITHUB_SHA"
+          for _ in $(seq 1 60); do curl -sf "http://localhost:3000$HEALTH_PATH" >/dev/null && break; sleep 1; done
+          curl -sf "http://localhost:3000$HEALTH_PATH" >/dev/null || { echo "::error::$HEALTH_PATH didn't answer"; exit 1; }
+          for path in $SMOKE_PATHS; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$path")
+            case "$code" in 2*|3*) echo "$path → $code" ;; *) echo "::error::$path answered $code"; exit 1 ;; esac
+          done
+          echo "The container is healthy."
+      - name: Container logs
+        if: always()
+        run: docker logs app || true
+      - name: Log in to the registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the tested image
+        if: env.PUBLISH == 'true'
+        run: docker push "$IMAGE:$GITHUB_SHA"
+
+  # Main → staging, a release tag → production, or an ops command in the chosen environment.
+  deploy:
+    name: ${{ inputs.command || (github.ref_type == 'tag' && 'production' || 'staging') }}
+    needs: [image]
+    if: |
+      always() && (
+        inputs.command != '' ||
+        github.ref_type == 'tag' ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.image.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: ${{ inputs.command != '' && inputs.environment || (github.ref_type == 'tag' && 'production' || 'staging') }}
+    concurrency:
+      group: deploy-${{ inputs.command != '' && inputs.environment || (github.ref_type == 'tag' && 'production' || 'staging') }}
+      cancel-in-progress: false
+    env:
+      DESTINATION: ${{ inputs.command != '' && inputs.environment || (github.ref_type == 'tag' && 'production' || 'staging') }}
+      COMMAND: ${{ inputs.command || 'deploy' }}
+      KAMAL_REGISTRY_USERNAME: ${{ github.actor }}
+      KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Names
+        run: |
+          {
+            echo "LAUTTA_IMAGE=${GITHUB_REPOSITORY,,}"
+            echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "SERVICE=$(sed -n 's/^service: *//p' config/deploy.yml)"
+          } >> "$GITHUB_ENV"
+
+      - name: Log in to the registry
+        run: echo "$KAMAL_REGISTRY_PASSWORD" | docker login ghcr.io -u "$KAMAL_REGISTRY_USERNAME" --password-stdin >/dev/null
+
+      # A release deploys only an image main built and tested for the same commit. If main's
+      # pipeline is still running, wait for it; if it failed, stop.
+      - name: Wait for the tested image
+        if: env.COMMAND == 'deploy' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.workflow }}
+        run: |
+          for _ in $(seq 1 60); do
+            if docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" >/dev/null 2>&1; then
+              echo "Found the tested image for ${GITHUB_SHA:0:7}."; exit 0
+            fi
+            state=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --branch main --event push \
+              --json workflowName,status,conclusion \
+              --jq "map(select(.workflowName == \"$WORKFLOW\")) | .[0] | \"\(.status) \(.conclusion)\"")
+            case "$state" in
+              "completed success") ;;
+              completed*) echo "::error::The pipeline failed for ${GITHUB_SHA:0:7} on main ($state). Fix it and release again."; exit 1 ;;
+              ""|"null null") echo "::error::No pipeline run on main for ${GITHUB_SHA:0:7}. Push the commit to main first."; exit 1 ;;
+            esac
+            echo "Waiting for main's pipeline to push the image ($state)…"; sleep 20
+          done
+          echo "::error::No tested image for ${GITHUB_SHA:0:7} after 20 minutes."; exit 1
+
+      - name: Load secrets references
+        env:
+          OPS_VAULT: ${{ inputs.ops-vault }}
+        run: |
+          file=".lautta/secrets.$DESTINATION"
+          [ -f "$file" ] || { echo "::error::$file is missing. Run lautta init."; exit 1; }
+          grep -E '^[A-Z][A-Z0-9_]*=op://' "$file" >> "$GITHUB_ENV" || true
+          {
+            echo "DEPLOY_SSH_KEY=op://$OPS_VAULT/deploy-ssh-key/private key?ssh-format=openssh"
+            echo "DEPLOY_KNOWN_HOSTS=op://$OPS_VAULT/known-hosts/notesPlain"
+          } >> "$GITHUB_ENV"
+
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+      - uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ env.DEPLOY_SSH_KEY }}
+      - name: Trust the servers
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+      - run: gem install kamal -v "$KAMAL_VERSION" --no-document
+
+      - name: ${{ inputs.command || 'deploy' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTORE_TO: ${{ inputs.restore_to }}
+          ROLLBACK_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          yaml() { ruby -ryaml -rerb -e "c = YAML.load(ERB.new(File.read('$1')).result); puts(eval(ARGV[0]))" "$2"; }
+          host=$(yaml "config/deploy.$DESTINATION.yml" 'c["servers"]["web"]["hosts"].first')
+          domain=$(yaml "config/deploy.$DESTINATION.yml" 'c["proxy"]["host"]')
+          health=$(yaml config/deploy.yml 'c["proxy"]["healthcheck"]["path"]')
+          server="deploy@$host"
+          # Kamal names app containers <service>-web-<destination>-<version>, newest first.
+          # `versions` lists the running one; `versions -a` the stopped ones too.
+          # shellcheck disable=SC2029 # expanded locally on purpose
+          versions() {
+            ssh "$server" "docker ps $1 --filter label=service=$SERVICE --filter label=role=web --filter label=destination=$DESTINATION --format '{{.Names}}'" \
+              | sed -E "s/^$SERVICE-web-$DESTINATION-//; s/_replaced_.*$//" | grep -vx latest | awk '!seen[$0]++'
+          }
+          check_site() {
+            for _ in $(seq 1 30); do
+              curl -fsS -o /dev/null "https://$domain$health" && { echo "https://$domain is up."; return 0; }
+              sleep 2
+            done
+            echo "::error::https://$domain$health didn't answer."; return 1
+          }
+          require_image() {
+            docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" >/dev/null 2>&1 \
+              || { echo "::error::No tested image for ${GITHUB_SHA:0:7}. Let the pipeline pass on main first."; exit 1; }
+          }
+
+          case "$COMMAND" in
+            deploy)
+              version=$GITHUB_SHA
+              if [ "$GITHUB_REF_TYPE" = tag ]; then
+                version=$GITHUB_REF_NAME
+                docker buildx imagetools create -t "$IMAGE:$version" "$IMAGE:$GITHUB_SHA"
+              fi
+              kamal deploy -d "$DESTINATION" --skip-push --version "$version"
+              ;;
+            redeploy)
+              require_image
+              kamal deploy -d "$DESTINATION" --skip-push --version "$GITHUB_SHA"
+              ;;
+            setup)
+              require_image
+              kamal setup -d "$DESTINATION" --skip-push --version "$GITHUB_SHA"
+              ;;
+            rollback)
+              current=$(versions "" | head -1)
+              target=${ROLLBACK_VERSION:-$(versions "-a" | grep -vx "$current" | head -1 || true)}
+              [ -n "$target" ] || { echo "::error::No earlier version on $host to roll back to."; exit 1; }
+              echo "Rolling back from ${current:-nothing running} to $target"
+              kamal rollback -d "$DESTINATION" "$target"
+              check_site
+              ;;
+            restore-database)
+              db=$(yaml config/deploy.yml 'c["accessories"]["litestream"]["env"]["clear"]["DATABASE_FILE"]')
+              volume="${SERVICE}_data"
+              stamp=$(date -u +%Y%m%dT%H%M%SZ)
+              at=""
+              [ -n "$RESTORE_TO" ] && at="-timestamp $RESTORE_TO"
+              version=$(versions "" | head -1)
+              echo "1/5 Restoring ${RESTORE_TO:-the latest copy} of $db"
+              kamal accessory exec litestream -d "$DESTINATION" --reuse "sh -c 'rm -f /data/restored.db* && litestream restore $at -o /data/restored.db /data/$db'"
+              echo "2/5 Stopping the app${version:+ ($version)} and the backup stream"
+              kamal app stop -d "$DESTINATION"
+              kamal accessory stop litestream -d "$DESTINATION"
+              echo "3/5 Swapping the files (the current database is kept as $db.before-restore-$stamp)"
+              # shellcheck disable=SC2029 # expanded locally on purpose
+              ssh "$server" "docker run --rm -v $volume:/data busybox sh -c 'set -e; cd /data
+                for f in $db $db-wal $db-shm; do [ -e \$f ] && mv \$f \$f.before-restore-$stamp; done
+                mv restored.db $db && chown 1000:1000 $db'"
+              echo "4/5 Starting the backup stream and the app"
+              kamal accessory start litestream -d "$DESTINATION"
+              kamal app boot -d "$DESTINATION" ${version:+--version "$version"}
+              echo "5/5 Checking the site"
+              check_site || { echo "::error::The previous database is in the $volume volume as $db.before-restore-$stamp"; exit 1; }
+              ;;
+            backups)
+              kamal accessory reboot litestream -d "$DESTINATION" || kamal accessory boot litestream -d "$DESTINATION"
+              ;;
+            logs)
+              kamal app logs -d "$DESTINATION" --lines 300
+              ;;
+            *)
+              echo "::error::Unknown command $COMMAND"; exit 1
+              ;;
+          esac
+
+      - name: Release notes
+        if: env.COMMAND == 'deploy' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exit 0
+          git fetch --quiet --force --tags origin
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            git log --no-merges --format='- %s' ${previous:+"$previous"..}"$GITHUB_REF_NAME"
+            if [ -n "$previous" ]; then
+              echo
+              echo "**Full changelog:** $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$previous...$GITHUB_REF_NAME"
+            fi
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md

@@ -29,7 +29,7 @@ on:
 
 jobs:
   ops:
-    uses: mhernesniemi/lautta/.github/workflows/ops.yml@{{lautta_ref}}
+    uses: mhernesniemi/lautta/.github/workflows/app.yml@{{lautta_ref}}
     with:
       command: ${{ inputs.command }}
       environment: ${{ inputs.environment }}

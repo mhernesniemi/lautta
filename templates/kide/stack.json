@@ -2,8 +2,13 @@
   "description": "Kide CMS (Astro, Node target)",
   "dockerfile": "node",
   "buildOutput": "dist",
-  "start": ["node", "dist/server/entry.mjs"],
-  "copy": ["src/cms/migrations"],
+  "start": [
+    "node",
+    "dist/server/entry.mjs"
+  ],
+  "copy": [
+    "src/cms/migrations"
+  ],
   "healthPath": "/api/cms/health",
   "database": "cms.db",
   "env": {
@@ -12,7 +17,9 @@
     "CMS_SCHEDULER": "1",
     "CMS_CACHE_DIR": "/data/cache"
   },
-  "originEnv": ["CMS_TRUSTED_ORIGIN"],
+  "originEnv": [
+    "CMS_TRUSTED_ORIGIN"
+  ],
   "secrets": [
     "KIDE_AUTH_SECRET",
     "CRON_SECRET",
@@ -23,5 +30,8 @@
     "S3_ACCESS_KEY_ID",
     "S3_SECRET_ACCESS_KEY"
   ],
-  "memory": "768m"
+  "memory": "768m",
+  "scripts": {
+    "db:check": "kide migrate --check"
+  }
 }
