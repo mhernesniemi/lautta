@@ -1,0 +1,37 @@
+# Every server and project lautta runs. Lives in a private repo with main.tf next to it.
+
+# Public keys allowed to log in to the servers as `deploy`: the team's and the deploy key.
+ssh_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleDeployKey deploy@lautta
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleTeamKey matti@laptop
+
+# Backups and uploads, in a different zone from the servers.
+object_storage_region: europe-1
+
+# Our Cloudflare zones (name: zone id). Projects' domains get A records in them.
+cloudflare_zones:
+  example.fi: 0123456789abcdef0123456789abcdef
+
+# 1Password vault (UUID) for the deploy SSH key and the servers' known_hosts.
+ops_vault: abcdefghijklmnopqrstuvwxyz
+
+hosts:
+  prod-1:
+    zone: fi-hel1
+    plan: 4xCPU-8GB
+  staging-1:
+    zone: fi-hel1
+    plan: 2xCPU-4GB
+
+projects:
+  client-shop:
+    client: Client Oy
+    stack: hoikka
+    vault: zyxwvutsrqponmlkjihgfedcba # the client's 1Password vault (UUID)
+    production:
+      host: prod-1
+      domains: [shop.example.fi]
+    staging:
+      host: staging-1
+      domains: [client-shop.staging.example.fi]
+    uptime_paths: [/api/health, /]
