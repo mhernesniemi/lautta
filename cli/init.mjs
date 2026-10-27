@@ -82,6 +82,11 @@ export function init(dir, options) {
 		console.log(`  wrote ${path}`);
 	}
 	updatePackageJson(dir, ref, loadStack(options.stack).scripts);
+	if (!existsSync(join(dir, '.node-version'))) {
+		const nvmrc = join(dir, '.nvmrc');
+		writeFileSync(join(dir, '.node-version'), existsSync(nvmrc) ? readFileSync(nvmrc, 'utf8') : '22\n');
+		console.log('  wrote .node-version');
+	}
 
 	const state = {
 		lautta: lauttaVersion(),
