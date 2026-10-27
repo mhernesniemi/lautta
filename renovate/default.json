@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Lautta projects: weekly, grouped updates; safe ones merge themselves once the pipeline passes",
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  "timezone": "Europe/Helsinki",
+  "schedule": ["before 7am on monday"],
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": { "enabled": true, "automerge": true },
+  "packageRules": [
+    {
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "dev dependencies",
+      "automerge": true
+    },
+    {
+      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "dependencies"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["lautta", "mhernesniemi/lautta"],
+      "groupName": "lautta",
+      "automerge": false
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": false,
+      "automerge": false
+    }
+  ]
+}
