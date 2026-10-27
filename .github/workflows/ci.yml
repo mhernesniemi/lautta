@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    name: CLI and templates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Render every stack
+        run: node scripts/render-stacks.mjs rendered
+      - name: Rendered Kamal and Litestream configs parse
+        run: |
+          for file in rendered/*/config/*.yml; do
+            ruby -ryaml -rerb -e 'YAML.load(ERB.new(File.read(ARGV[0])).result)' "$file"
+          done
+      - name: Workflows (this repo's and the rendered projects')
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint .github/workflows/*.yml rendered/*/.github/workflows/*.yml
+      - name: Shell scripts
+        run: shellcheck infra/modules/host/host-check.sh
+
+  infra:
+    name: OpenTofu modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - run: tofu fmt -check -recursive
+      - name: Validate
+        run: |
+          for dir in infra/modules/*/; do
+            (cd "$dir" && tofu init -backend=false -input=false >/dev/null && tofu validate)
+          done
