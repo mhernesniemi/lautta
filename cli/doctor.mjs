@@ -38,6 +38,13 @@ export function doctor(dir) {
 		}
 	}
 
+	const pkgPath = join(dir, 'package.json');
+	const pkg = existsSync(pkgPath) ? JSON.parse(readFileSync(pkgPath, 'utf8')) : {};
+	if (!pkg.packageManager?.startsWith('pnpm@')) {
+		console.log('  missing   "packageManager": "pnpm@<version>" in package.json (pins pnpm everywhere)');
+		clean = false;
+	}
+
 	console.log(clean ? '✓ Matches the lautta templates.' : '✗ See above.');
 	return clean;
 }

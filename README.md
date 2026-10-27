@@ -62,6 +62,7 @@ Renovate bumps lautta in every project. Then `pnpm lautta doctor` shows what cha
 
 ## The app contract
 
+- Pins pnpm with `packageManager` and Node with `.node-version`
 - Listens on port 3000 and has a health check
 - Logs to stdout; all config from env vars
 - Runs its migrations at start

@@ -79,7 +79,7 @@ test('stacks with a database stream it to Object Storage', () => {
 
 test('init writes the files, doctor sees drift, update takes template changes', () => {
 	const dir = mkdtempSync(join(tmpdir(), 'lautta-'));
-	writeFileSync(join(dir, 'package.json'), '{\n  "name": "x"\n}\n');
+	writeFileSync(join(dir, 'package.json'), '{\n  "name": "x",\n  "packageManager": "pnpm@10.27.0"\n}\n');
 	writeFileSync(join(dir, '.node-version'), '22\n');
 	writeFileSync(join(dir, 'pnpm-lock.yaml'), '');
 	quietly(() => init(dir, options));
