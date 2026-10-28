@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { doctor, update } from '../cli/doctor.mjs';
-import { init } from '../cli/init.mjs';
+import { detectStack, init, resolveOptions } from '../cli/init.mjs';
 import { renderProject, sha, STACKS } from '../cli/project.mjs';
 import { nextTag } from '../cli/release.mjs';
 import { render } from '../cli/render.mjs';
@@ -102,6 +102,56 @@ test('init writes the files, doctor sees drift, update takes template changes', 
 	quietly(() => update(dir));
 	assert.match(readFileSync(join(dir, 'config/deploy.yml'), 'utf8'), /service: client-shop/);
 	assert.equal(readFileSync(join(dir, 'Dockerfile'), 'utf8'), 'changed\n');
+});
+
+test('detects the stack from the project files', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'lautta-'));
+	assert.equal(detectStack(dir), undefined);
+	writeFileSync(join(dir, 'package.json'), JSON.stringify({ devDependencies: { astro: '5' } }));
+	assert.equal(detectStack(dir), 'astro-static');
+	writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { astro: '5', '@kidecms/core': '0.36' } }));
+	assert.equal(detectStack(dir), 'kide');
+	writeFileSync(join(dir, 'hoikka.config.ts'), '');
+	assert.equal(detectStack(dir), 'hoikka');
+});
+
+test('without a terminal, init names every missing flag and shows the full command', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'lautta-'));
+	writeFileSync(join(dir, 'hoikka.config.ts'), '');
+	await assert.rejects(
+		resolveOptions(dir, { image: 'acme/acme-shop', vault: 'acme' }),
+		(error) =>
+			/Missing --production-domain, --production-host, --staging-domain, --staging-host/.test(error.message) &&
+			/--stack hoikka/.test(error.message) &&
+			/--service acme-shop/.test(error.message)
+	);
+	await assert.rejects(resolveOptions(dir, { ...options, 'production-host': 'not-an-ip' }), /production-host/);
+});
+
+test('in a terminal, init asks only for what it could not work out', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'lautta-'));
+	writeFileSync(join(dir, 'hoikka.config.ts'), '');
+	const asked = [];
+	const answers = { Stack: '', 'Service name': '', '1Password vault': 'acme', 'Production server IP': '203.0.113.10' };
+	const ask = async (label, fallback, check) => {
+		asked.push(label);
+		const answer = answers[label] || fallback;
+		assert.equal(check(answer), null, label);
+		return answer;
+	};
+	const resolved = await resolveOptions(
+		dir,
+		{
+			image: 'acme/acme-shop',
+			'production-domain': 'acme-kauppa.fi',
+			'staging-domain': 'acme-shop.staging.example.fi',
+			'staging-host': '203.0.113.20'
+		},
+		ask
+	);
+	assert.deepEqual(asked, ['Stack', 'Service name', '1Password vault', 'Production server IP']);
+	assert.equal(resolved.stack, 'hoikka');
+	assert.equal(resolved.service, 'acme-shop');
 });
 
 test('release tags count up within a day', () => {

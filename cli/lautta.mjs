@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { init } from './init.mjs';
+import { runInit } from './init.mjs';
 import { doctor, update } from './doctor.mjs';
 import { release } from './release.mjs';
 import { STACKS } from './project.mjs';
@@ -8,9 +8,12 @@ import { STACKS } from './project.mjs';
 const HELP = `lautta: build, ship and run client web apps on UpCloud
 
 Usage:
-  lautta init --stack <stack> --production-domain <domain> --production-host <ip>
-              --staging-domain <domain> --staging-host <ip> [--service <name>]
-              [--vault <1password vault>] [--image <owner/repo>] [--force]
+  lautta init             Set this project up. In a terminal, asks for anything not passed;
+                          otherwise every value is needed as a flag (stack and service are detected):
+                          [--stack <stack>] [--service <name>] --vault <1password vault>
+                          --production-domain <domain> --production-host <ip>
+                          --staging-domain <domain> --staging-host <ip>
+                          [--image <owner/repo>] [--yes] [--force]
   lautta doctor           Compare this project's lautta files with the templates
   lautta update           Take template updates for the files this project hasn't changed
   lautta release          Tag main as a release (vYYYY.MM.DD) and deploy it to production
@@ -19,9 +22,10 @@ Usage:
 Stacks: ${STACKS.join(', ')}`;
 
 const [command, ...rest] = process.argv.slice(2);
+const wantsHelp = rest.includes('--help') || rest.includes('-h');
 
 try {
-	switch (command) {
+	switch (wantsHelp ? 'help' : command) {
 		case 'init': {
 			const { values } = parseArgs({
 				args: rest,
@@ -35,10 +39,12 @@ try {
 					vault: { type: 'string' },
 					image: { type: 'string' },
 					'lautta-ref': { type: 'string' },
+					yes: { type: 'boolean', default: false },
 					force: { type: 'boolean', default: false }
 				}
 			});
-			init(process.cwd(), values);
+			const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !values.yes;
+			await runInit(process.cwd(), values, { interactive });
 			break;
 		}
 		case 'doctor':
