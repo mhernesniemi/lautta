@@ -16,11 +16,13 @@ Stacks: `sveltekit`, `hoikka`, `kide`, `astro-static`.
 ## Start a project
 
 ```sh
-pnpm dlx github:mhernesniemi/lautta init --stack hoikka --vault client \
-  --production-domain shop.client.fi --production-host 203.0.113.10 \
-  --staging-domain client-shop.staging.example.fi --staging-host 203.0.113.20
+pnpm dlx github:mhernesniemi/lautta init
 pnpm install
 ```
+
+It detects the stack and asks for the rest: the client's 1Password vault, domains and server
+IPs. Scripts and AI agents pass the values as flags instead; without a terminal it never asks,
+and tells you exactly which flags are missing (`lautta init --help`).
 
 Then:
 
